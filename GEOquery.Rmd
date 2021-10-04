@@ -1,0 +1,205 @@
+原文链接：https://www.jianshu.com/p/0d32fd410bcf
+
+1 GEO概述
+NCBI Gene Expression Omnibus（GEO）作为各种高通量实验数据的公共存储库。这些数据包括基于单通道和双通道微阵列的实验，检测mRNA，基因组DNA和蛋白质丰度，以及非阵列技术，如基因表达系列分析（SAGE），质谱蛋白质组学数据和高通量测序数据。
+
+在GEO最基本的组织层面，有四种基本实体类型。前三个（样本，平台和系列）由用户提供; 第四，数据集由GEO工作人员根据用户提交的数据进行编译和策划。相关更多信息，请参阅GEO主页。
+
+1.1 平台
+平台记录描述阵列上的元件列表（例如，cDNA，寡核苷酸探针组，ORF，抗体）或可在该实验中检测和定量的元件列表（例如，SAGE标签，肽）。每个平台记录都分配有唯一且稳定的GEO登录号（GPLxxx）。平台可以引用多个提交者提交的许多样本。
+
+1.2 样品
+样品记录描述了处理单个样品的条件，它经历的操作以及从中得到的每个元素的丰度测量。每个样品记录都分配有唯一且稳定的GEO登录号（GSMxxx）。Sample实体必须仅引用一个Platform，可以包含在多个Series中。
+
+1.3 系列
+系列记录定义了一组被认为是组的一部分的相关样本，样本如何相关，以及它们是否以及如何排序。A系列提供了整个实验的焦点和描述。系列记录还可能包含描述提取数据，摘要结论或分析的表格。每个系列记录都分配有唯一且稳定的GEO登记号（GSExxx）。系列记录有几种格式，由GEOquery独立处理。较小的和新的GSEMatrix文件解析起来非常快; GEOquery使用一个简单的标志来选择使用GSEMatrix文件（见下文）。
+
+1.4 数据集
+GEO DataSet（GDSxxx）是GEO样本数据的精选集合。GDS记录代表了一系列具有生物学和统计学意义的GEO样本，构成了GEO数据显示和分析工具套件的基础。GDS中的样本指的是同一个平台，也就是说，它们共享一组共同的探测元素。假设GDS中每个样本的值测量值以等效方式计算，即背景处理和标准化等考虑因素在整个数据集中是一致的。通过GDS子集提供反映实验设计的信息。
+
+```{r 数据导入}
+library(GEOquery)
+# If you have network access, the more typical way to do this
+# would be to use this:
+gds <- getGEO("GDS507")
+#gds <- getGEO(filename=system.file("extdata/GDS507.soft.gz",package="GEOquery"))
+gsm <- getGEO("GSM11805")
+#gsm <- getGEO(filename=system.file("extdata/GSM11805.txt.gz",package="GEOquery"))
+```
+
+3.1 GDS，GSM和GPL类
+这些类中的每一个都包含一个元数据头（几乎从SOFT格式标题中逐字逐句）和一个GEODataTable。GEODataTable有两个简单的部分，一个Columns部分，用于描述Table部分的列标题。show每个班级还有一种方法。例如，使用上面的gsm：
+
+```{r}
+# Look at gsm metadata:
+Meta(gsm)
+# Look at data associated with the GSM:
+# but restrict to only first 5 rows, for brevity
+Table(gsm)[1:5,]
+# Look at Column descriptions:
+Columns(gsm)
+#在GPL类的行为完全一样的GSM类。但是，GDS该类具有与该Columns方法相关的更多信息：
+Columns(gds)
+```
+
+3.2 GSE内容
+该GSE实体是GEO实体中最混乱的。GSE条目可以表示在任意数量的平台上运行的任意数量的样本。该GSE班有一个元数据部分，就像其他类。但是，它没有GEODataTable。相反，它包含两个列表，可以使用GPLList和GSMList方法访问，每个列表都包含对象GPL和列表GSM。举个例子：
+
+```{r GSE}
+# Again, with good network access, one would do:
+gse <- getGEO("GSE781",GSEMatrix=FALSE)
+#gse <- getGEO(filename=system.file("extdata/GSE781_family.soft.gz",package="GEOquery"))
+Meta(gse)
+# names of all the GSM objects contained in the GSE
+names(GSMList(gse))
+# and get the first GSM object on the list
+GSMList(gse)[[1]]#两个括号表示不带名字的list内容
+# and the names of the GPLs represented
+names(GPLList(gse))
+```
+
+4 转换为BioConductor ExpressionSets和limma MALists
+GEO数据集（不像其他一些地理实体的），比较相似limma的数据结构MAList，并为Biobase数据结构ExpressionSet。因此，有两个功能，GDS2MA、GDS2eSet是完成这项任务。
+
+4.1将 GSE Series Matrix文件作为ExpressionSet获取
+GEO系列是相关实验的集合。除了可用作非常大的SOFT格式文件外，NCBI GEO还根据制表符分隔的文本准备了一个更简单的格式文件。该getGEO函数可以处理这种格式，并且可以非常快速地解析非常大的GSE。从此解析返回的数据结构是ExpressionSets列表。例如，我们下载并解析GSE2553。
+
+```{r}
+# Note that GSEMatrix=TRUE is the default
+gse2553 <- getGEO('GSE2553',GSEMatrix=TRUE)
+show(gse2553)
+#phenoData returns an object containing information on both variable values and variable meta-data.
+phenoData(gse2553[[1]])
+#pData returns a data frame with samples as rows, variables as columns. 
+pData(phenoData(gse2553[[1]]))
+show(pData(phenoData(gse2553[[1]]))[1:5,c(1,6,8)])
+```
+
+4.2 将GDS转换为ExpressionSet
+gds从上面看我们的对象，我们可以简单地做：
+
+```{r}
+eset <- GDS2eSet(gds,do.log2=TRUE)
+eset
+pData(eset)[,1:3]
+```
+
+4.3 将GDS转换为MAList
+没有注释信息（由GEO称为平台信息），因为ExpressionSet通常不包含基因信息。但是，很容易获得这些信息。首先，我们需要知道这个GDS使用的平台。然后，代码getGEO会给我们提供我们需要的东西。
+
+```{r}
+#get the platform from the GDS metadata
+Meta(gds)$platform
+#So use this information in a call to getGEO
+gpl <- getGEO(filename=system.file("extdata/GPL97.annot.gz",package="GEOquery"))
+```
+
+所以，gpl现在包含GEO的GPL信息。与ExpressionSetlimma 不同，limma MAList存储基因注释信息，因此我们可以在调用中使用我们新创建gpl的类GPL，GDS2MA如下所示：
+
+```{r}
+MA <- GDS2MA(gds,GPL=gpl)
+class(MA)
+#现在，MA它MAList不仅包含数据，还包含与GDS507相关的样本信息和基因信息。
+```
+
+4.4 将GSE转换为ExpressionSet
+首先，确保使用上面“将GSE系列矩阵文件作为表达式集获取”部分中描述的方法来使用GSE，Series Matrix文件不足以完成任务，因为它更快更简单。如果不是（即，需要来自每个GSM的其他列），则将需要该方法。
+
+转换GSE对象到ExpressionSet对象目前采用比特的R数据操纵由于可存储在所述变化数据GSE和底层GSM和GPL对象。但是，使用一个简单的例子有望说明该技术。
+
+首先，我们需要确保所有这些GSMs都来自同一平台：
+```{r}
+gsmplatforms <- lapply(GSMList(gse),function(x) {Meta(x)$platform_id})
+head(gsmplatforms)
+#实际上，有两个GPL，GPL96和GPL97，作为他们的平台（我们可以通过查看GPLList来确定gse）。我们可以过滤原始GSMList以仅包含具有GPL96平台的那些GSM并使用该列表进行进一步处理
+gsmlist <- Filter(function(gsm) {Meta(gsm)$platform_id=='GPL96'},GSMList(gse))
+length(gsmlist)
+```
+
+所以，现在我们想知道哪个列代表我们想要提取的数据。查看单个GSM表的前几行可能会给我们一个想法（顺便说一下，GEO使用一种惯例，即每个数组包含单个测量的VALUE列称为列，如果我们可以使用，我们不知道其他哪一栏最相关）。
+
+```{r}
+gsmlist[[1]]
+Table(gsmlist[[1]])[1:5,]
+# and get the column descriptions
+Columns(gsmlist[[1]])[1:5,]
+```
+
+制作矩阵
+```{r}
+# get the probeset ordering
+probesets <- Table(GPLList(gse)[[1]])$ID
+# make the data matrix from the VALUE columns from each GSM
+# being careful to match the order of the probesets in the platform
+# with those in the GSMs
+data.matrix <- do.call('cbind',lapply(gsmlist,function(x) 
+                                      {tab <- Table(x)
+                                       mymatch <- match(probesets,tab$ID_REF)
+                                       return(tab$VALUE[mymatch])
+                                     }))
+#lapply returns a list of the same length as X, each element of which is the result of applying FUN to the corresponding element of X.
+data.matrix <- apply(data.matrix,2,function(x) {as.numeric(as.character(x))})
+#apply returns a vector or array or list of values obtained by applying a function to margins of an array or matrix.
+data.matrix <- log2(data.matrix)
+data.matrix[1:5,]
+```
+
+请注意，我们这样做是match为了确保值和平台信息的顺序相同。最后，制作ExpressionSet对象：
+```{r}
+require(Biobase)
+# go through the necessary steps to make a compliant ExpressionSet
+rownames(data.matrix) <- probesets
+colnames(data.matrix) <- names(gsmlist)
+pdata <- data.frame(samples=names(gsmlist))
+rownames(pdata) <- names(gsmlist)
+pheno <- as(pdata,"AnnotatedDataFrame")
+eset2 <- new('ExpressionSet',exprs=data.matrix,phenoData=pheno)
+eset2
+```
+
+因此，使用lapplyGSMList 的组合，可以根据需要提取尽可能多的感兴趣的列来构建所选择的数据结构。因为来自GEO网站的GSM数据被完全下载并包含在GSE对象中，所以例如可以提取双通道阵列的前景和背景以及质量。获取数组注释也有点复杂，但通过在lapply调用中替换“platform”来获取每个数组的平台信息，可以获得与每个数组相关的其他信息。
+
+
+
+5从GEO访问原始数据
+NCBI GEO接受（但并非总是需要）原始数据，如.CEL文件，.CDF文件，图像等。有时，快速访问此类数据很有用。单个函数getGEOSuppFiles可以将GEO登录作为参数，并将下载与该登录关联的所有原始数据。默认情况下，该函数将在当前工作目录中创建一个目录，以存储所选GEO登录的原始数据。结合简单的sapply语句或其他循环结构，getGEOSuppFiles可以非常简单地快速轻松地获取原始数据，而无需了解GEO原始数据URL的具体信息。
+
+6 示例
+GEOquery可以非常强大，可以快速收集大量数据。一些示例可用于说明如何为数据挖掘目的进行此操作。
+
+6.1 获取给定平台的所有系列记录
+出于数据挖掘的目的，有时能够为给定平台提取所有GSE记录。GEOquery使这很容易，但是开始时需要对GPL记录有一点了解。GPL记录包含引用它的GSE和GSM加入。一些代码有助于说明这一点：
+
+```{r}
+gpl97 <- getGEO('GPL97')
+Meta(gpl97)$title
+head(Meta(gpl97)$series_id)
+length(Meta(gpl97)$series_id)
+head(Meta(gpl97)$sample_id)
+length(Meta(gpl97)$sample_id)
+```
+
+上面的代码将GPL97记录加载到R.Meta方法从GPL记录中提取标题信息列表。在title给该平台的人的名字。在series_id给出一系列ID的载体。请注意，此平台有163个系列和7877个样本。可以使用以下代码下载所有样本或系列。只展示前5个样本作为例子：
+
+```{r}
+gsmids <- Meta(gpl97)$sample_id
+gsmlist <- sapply(gsmids[1:5],getGEO)
+#sapply is a user-friendly version and wrapper of lapply by default returning a vector, matrix or, if simplify="array", an array if appropriate, by applying simplify2array(). sapply(x, f, simplify=FALSE, USE.NAMES=FALSE) is the same as lapply(x, f).
+names(gsmlist)
+```
+
+7 结论
+GEOquery包为NCBI GEO存储库中包含的大量阵列资源提供了桥梁。通过保持GEO数据的丰富性而不是仅仅关注“数字”，可以将GEO数据集成到当前的Bioconductor数据结构中，并且可以非常快速，轻松地对该数据进行分析。希望这些工具能够更全面地向阵列社区开放GEO数据。
+
+7.1 引用GEOquery
+如果用于支持您自己的研究，请考虑引用GEOquery：
+```{r}
+citation("GEOquery")
+```
+
+7.2报告问题或错误
+如果在使用GEOquery时遇到问题，Bioconductor支持网站是寻求帮助的第一个好地方。如果您确信GEOquery中存在错误（这是非常不寻常的，但并非闻所未闻），请随时在GEOquery github网站上提交问题或直接从R提交错误报告（将打开一个新的github问题） ：
+```{r}
+bug.report(package='GEOquery')
+```
+

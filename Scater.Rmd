@@ -1,0 +1,244 @@
+---
+title: "Scater"
+author: "MRB"
+date: "2021/9/12"
+output: html_document
+---
+
+教程链接：https://www.jianshu.com/p/d3bf2a0bea6e
+
+这个包是EMBL和剑桥大学发布的，是为分析单细胞转录组数据而开发，它包含了一些特性：
+
+它需要利用SingleCellExperiment这个对象，就是这个东西（来自Bioconductor-workshop）：
+
+1.可以导入非比对工具 kallisto and Salmon 得到的定量结果
+2.计算了大量的QC指标，方便过滤
+3.可视化方面做得不错，设计了大量的函数（尤其针对质控），并且功能如其名
+
+从2017年7月，scater包就改变了整体架构，从之前的SCESet对象更改成了更多人都在用的SingleCellExperiment ，使用Bioconductor 3.6 (2017.10发布)安装的包，都会是SingleCellExperiment 对象。如果要更迭也不难，官方给了许多解决方案，例如：toSingleCellExperiment函数、updateSCESet函数。
+
+
+第一步 创建一个SingleCellExperiment对象 (官网 24 May 2019)
+
+需要注意的是，官方友情提示，在导入对象之前，最好是将表达量数据存为矩阵；
+如果是较大的数据集，官方建议使用chunk-by-chunk的方法，参考Matrix 包，然后使用readSparseCounts函数，有效减少内存使用量（因为它可以不将大量的0表达量放进内存）；
+如果是导入10X的数据，使用DropletUtils 包的read10xCounts函数即可，它会自动生成一个SingleCellExperiment对象
+对于非比对定量工具，scater也提供了readSalmonResults、readKallistoResults 支持两款软件，它的背后利用的是tximport
+
+
+```{r}
+rm(list = ls()) 
+Sys.setenv(R_MAX_NUM_DLLS=999) ##在R3.3版本中，只能有100个固定的动态库限制，到了3.4版本以后，就能够使用Sys.setenv(R_MAX_NUM_DLLS=xxx)进行设置，而这个数字根据个人情况设定
+options(stringsAsFactors = F) 
+
+# 使用包自带的测试数据进行操作
+library(scater)
+library(scRNAseq)
+example_sce <- ZeiselBrainData()
+example_sce
+
+# 接下来就是构建对象(日后只需要复制粘贴替换即可)
+#最好用矩阵形式
+example_sce <- SingleCellExperiment(
+  assays = list(counts = #数据矩阵
+                  ), 
+  colData = #信息矩阵
+)
+
+example_sce
+```
+
+注意到上面构建对象时使用了counts = sc_example_counts这么一个定义，官方也推荐，使用counts作为导入表达矩阵的名称，这样会方便下面的counts函数提取；另外还支持exprs、tmp、cpm、fpkm这样的输入名称
+
+```{r}
+str(counts(example_sce))
+
+#调用或修改行或列的metadata比较方便：
+
+# 默认调用/修改 列，所以example_sce$whee就是新增一列metadata
+example_sce$whee <- sample(LETTERS, ncol(example_sce), replace=TRUE)#随机抽字母
+colData(example_sce)
+
+# 如果对行新增一行metadata(注意这里rowData和原来的矩阵没有关系，它操作的是一些注释信息)
+rowData(example_sce)$stuff <- runif(nrow(example_sce))#随机分配行名
+rowData(example_sce)
+```
+
+除此以外，还有一些比较复杂的函数：例如isSpike 对spike-in操作，sizeFactors 是进行标准化时对细胞文库大小计算的结果、reducedDim 对降维结果（reduced dimensionality results）操作
+
+另外，对这个对象取子集也是很方便的，例如要过滤掉在所有细胞中都不表达的基因：
+
+```{r}
+# 过滤不表达基因
+keep_feature <- rowSums(counts(example_sce) > 0) > 0
+example_sce <- example_sce[keep_feature,]
+dim(example_sce)
+```
+
+第二步 (可选)计算一堆表达统计值 (官网 24 May 2019)
+如果要计算CPM(count-per-million)值，之前一直使用log2(edgeR::cpm(dat)+1)进行计算，这个包自己做了一个函数：
+
+```{r}
+# 计算的CPM值存到example_sce对象的标准命名（cpm）中去
+cpm(example_sce) <- calculateCPM(example_sce)
+```
+
+另外还可以提供归一化：normalize函数，它计算得到：log2-transformed normalized expression values
+
+```{r}
+# 总体计算方法是：dividing each count by its size factor (or scaled library size, if no size factors are defined), adding a pseudo-count and log-transforming (翻译一下：将每个count值除以size factor，记得之前edgeR进行标准化就计算了这么一个值，它就是为了均衡各个样本文库差异；如果没有size factor，也可以对文库大小进行归一化)，接着加一个值(例如1，为了不让log为难)，最后log计算
+example_sce <- logNormCounts(example_sce) # 结果保存在logcounts中
+assayNames(example_sce)
+```
+
+注意：表达矩阵的标准命名中，exprs和logcounts是同义词，它是为了和老版本的scater函数兼容：
+```{r}
+identical(exprs(example_sce), logcounts(example_sce))
+```
+
+另外，我们也可以根据需要创建一个和原始count矩阵同样维度的新矩阵，存储在assay中
+```{r}
+# 比如创建一个判断的矩阵，看看原来count矩阵中的每个值是不是都大于0，结果是一堆的逻辑值
+assay(example_sce, "is_expr") <- counts(example_sce)>0
+```
+
+还有，calcAverage函数可以计算样本归一化以后，各个基因的平均表达量(如果样本还没进行标准化，那么它首先会计算size factor)
+```{r}
+calcAverage(example_sce)#现在不能用了
+```
+
+
+第三步 数据可视化(官网 24 May 2019)
+重点包含这几方面：
+
+1.plotExpression ：画出一个或多个基因在细胞中的表达量水平
+2.plotReducedDim：(计算或)绘制降维后的坐标
+3.其他的QC图
+
+```{r}
+# 最简单的图
+# 默认使用标准化后的logcounts值
+plotExpression(example_sce, rownames(example_sce)[1:6])
+```
+
+```{r}
+# 增加分组信息：定义x是一个离散型分组变量
+plotExpression(example_sce, rownames(example_sce)[1:6],
+    x = "tissue", exprs_values = "logcounts") 
+
+# 查看绘制的x这个metadata
+colData(example_sce)$tissue
+```
+
+这个x参数的设置很讲究：它的英文含义是 covariate to be shown on the x-axis，定义了x轴上的协变量。简单理解，就是x轴上按照什么来定义，如果x是一个分类的离散型变量(比如这里的positive、negative)，那么x轴就是为了分组，结果就是小提琴图；如果x是一个连续的变量(比如下面👇要演示的某个基因表达量)，那么x轴就是为了看数值的变化，结果就是散点图
+
+```{r}
+plotExpression(example_sce, rownames(example_sce)[1:6],
+    x = "age", exprs_values = "logcounts") 
+
+colData(example_sce)$age
+```
+
+可以自定义颜色、形状、大小的区分，例如:
+
+```{r}
+plotExpression(example_sce, rownames(example_sce)[1:6],
+               colour_by = "level1class", shape_by = "tissue", 
+               size_by = "age")
+# 利用两个metadata：level1class(区分颜色)、tissue(区分形状)
+# 利用一个表达量指标：age(区分大小)
+# 添加中位线、x轴分组
+plotExpression(example_sce, rownames(example_sce)[7:12],
+    x = "tissue", exprs_values = "counts", 
+    colour = "level1class", show_median = TRUE, 
+    xlab = "tissue", log = TRUE)
+```
+
+再来绘制降维相关的图：
+SingleCellExperiment对象中包含了reducedDims接口，其中存储了细胞降维后的坐标，可以用reducedDim、reducedDims函数获取
+
+关于这两个函数的不同：使用?reducedDim就能获得
+For reducedDim, a numeric matrix is returned containing coordinates for cells (rows) and dimensions (columns).
+
+For reducedDims, a named SimpleList of matrices is returned, with one matrix for each type of dimensionality reduction method.
+
+```{r}
+# runPCA结果保存在sce对象的PCA中。默认情况下，runPCA会根据500个变化差异最显著的feature的log-count值进行计算，当然这个数量可以通过ntop参数修改。
+example_sce <- runPCA(example_sce) 
+
+reducedDimNames(example_sce)
+
+example_sce
+```
+
+任何的降维结果，都能用plotReducedDim函数作图
+```{r}
+plotReducedDim(example_sce, dimred = "PCA", 
+    colour_by = "level1class", shape_by = "tissue")
+```
+
+然后可以利用表达量添加颜色、大小分组
+```{r}
+# 看特定基因在PCA过程中起到的作用
+plotReducedDim(example_sce, dimred = "PCA", 
+    colour_by ="Tspan12", size_by ="Tshz1" )
+```
+
+除了使用plotReducedDim，还能使用plotPCA自己去生成，但前提还是要使用PCA的计算结果；如果检测不到PCA的计算坐标，这个函数会自己runPCA计算一遍。尽管如此，还是推荐先进行计算，再作图。因为有时候我们需要利用一个数据集做出多张不同的图(就像上面👆一样)，但是每做一张图这个函数都要运行一遍太费时间，如果已经计算好，那么它就能直接调用，十分方便
+
+```{r}
+# 最简单的plotPCA
+plotPCA(example_sce)
+```
+
+它也可以像plotReducedDim一样，定义颜色、大小
+```{r}
+plotPCA(example_sce,
+    colour_by ="Tspan12", size_by ="Tshz1" )
+```
+
+另外我们可以自己选择进行PCA的数据，例如使用自己的feature_control（例如使用的ERCC spike-in ），来看看数据中是否存在技术误差而导致差异
+```{r}
+# 默认情况下，runPCA会根据500个变化差异最显著的feature。这里定义 feature_set可以覆盖默认设置
+# 看官方描述：eature_set Character vector of row names, a logical vector or a numeric vector of indices indicating a set of features to use for PCA. This will override any \code{ntop} argument if specified.
+
+example_sce2 <- runPCA(example_sce, 
+    subset_row = rowData(example_sce)$is_feature_control)
+plotPCA(example_sce2)
+```
+
+还可以绘制多个主成分：
+```{r}
+example_sce <- runPCA(example_sce, ncomponents=20)
+# 绘制4个成分
+plotPCA(example_sce, ncomponents = 4, colour_by = "level1class",
+        shape_by = "tissue")
+```
+
+接着使用t-SNE(t-distributed stochastic neighbour embedding)降维：**
+
+关于tsne这个流行的算法，有必要了解一下：
+
+tsne的作者Laurens强调，可以通过t-SNE的可视化图提出一些假设，但是不要用t-SNE来得出一些结论，想要验证你的想法，最好用一些其他的办法。
+t-SNE中集群之间的距离并不表示相似度 ，同一个数据上运行t-SNE算法多次，很有可能得到多个不同“形态”的集群。但话说回来，真正有差异的群体之间，不管怎么变换形态，它们还是有差别
+关于perplexity(复杂度)的使用：(默认值是30) 如果忽视了perplexity带来的影响，有的时候遇到t-SNE可视化效果不好时，对于问题无从下手。perplexity表示了近邻的数量，例如设perplexity为2，那么就很有可能得到很多两个一对的小集群。
+
+有的时候会出现同一集群被分为两半的情况，但群间的距离并不能说明什么，解决这个问题，只需要跑多次找出效果最好的就可以了
+引用自： https://bindog.github.io/blog/2018/07/31/t-sne-tips/
+很好的tsne可视化：https://distill.pub/2016/misread-tsne/
+
+和PCA类似，先runTSNE，再plotTSNE。另外注意，为了重复结果要设置随机种子，因为tsne每次映射的坐标结果都不同。官方强烈建议，使用不同的随机种子和perplexity数值出图
+
+```{r}
+# Perplexity of 10 just chosen here arbitrarily. 
+set.seed(1000)
+example_sce <- runTSNE(example_sce, perplexity=10)
+plotTSNE(example_sce, colour_by ="Tspan12", size_by ="Tshz1")
+```
+
+还可以使用diffusion maps降维：
+```{r}
+example_sce <- runDiffusionMap(example_sce)#?
+plotDiffusionMap(example_sce,colour_by ="Tspan12", size_by ="Tshz1")
+```
+
